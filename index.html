@@ -48,6 +48,11 @@
         <button class="btn icon" id="add" title="Add color" aria-label="Add color">
           <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
         </button>
+        <button class="btn" id="image" title="Extract palette from an image (or drop / paste one)">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>
+          <span>Image</span>
+        </button>
+        <input type="file" id="image-input" accept="image/*" hidden>
         <button class="btn" id="save" title="Save palette">
           <svg viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
           <span>Save</span>
@@ -68,7 +73,11 @@
 
   <main id="palette" class="palette" aria-live="polite"></main>
 
-  <p class="hint">Press <kbd>Space</kbd> to generate · click a code to copy · drag to reorder</p>
+  <p class="hint">Press <kbd>Space</kbd> to generate · click a code to copy · drag to reorder · drop or paste an image to extract its colors</p>
+
+  <div id="drop-overlay" class="drop-overlay" hidden>
+    <p>Drop an image to extract its palette</p>
+  </div>
 
   <!-- Export dialog -->
   <dialog id="export-dialog" class="dialog">

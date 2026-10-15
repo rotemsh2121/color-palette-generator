@@ -7,6 +7,8 @@
   const UNDO_LIMIT = 50;
   const LIBRARY_KEY = 'palette-generator:saved';
   const PREFS_KEY = 'palette-generator:prefs';
+  const EXTRACT_COUNT = 5;
+  const SAMPLE_SIZE = 160; // longest side, in px, of the downscaled image we sample
 
   const $ = (sel) => document.querySelector(sel);
 
@@ -18,6 +20,9 @@
     undo: $('#undo'),
     add: $('#add'),
     save: $('#save'),
+    image: $('#image'),
+    imageInput: $('#image-input'),
+    dropOverlay: $('#drop-overlay'),
     library: $('#library'),
     exportBtn: $('#export'),
     exportDialog: $('#export-dialog'),
@@ -489,6 +494,115 @@
   }
 
   /* ---------------------------------------------------------------------- */
+  /* Image extraction (all local: the file never leaves the browser)         */
+  /* ---------------------------------------------------------------------- */
+
+  function loadImage(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('unreadable')); };
+      img.src = url;
+    });
+  }
+
+  /** Downscale the image and return its opaque pixels as [r, g, b] triples. */
+  function samplePixels(img) {
+    const scale = Math.min(1, SAMPLE_SIZE / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, w, h);
+    const data = ctx.getImageData(0, 0, w, h).data;
+    const pixels = [];
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] >= 128) pixels.push([data[i], data[i + 1], data[i + 2]]);
+    }
+    return pixels;
+  }
+
+  const dist2 = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+
+  /** k-means with k-means++ seeding. Returns clusters sorted by size, largest first. */
+  function kmeans(points, k, maxIterations = 20) {
+    const centers = [points[Math.floor(Math.random() * points.length)].slice()];
+    const nearest = new Float64Array(points.length).fill(Infinity);
+    while (centers.length < k) {
+      const last = centers[centers.length - 1];
+      let total = 0;
+      for (let i = 0; i < points.length; i++) {
+        nearest[i] = Math.min(nearest[i], dist2(points[i], last));
+        total += nearest[i];
+      }
+      if (!total) break; // fewer distinct colors than k
+      let r = Math.random() * total;
+      let idx = 0;
+      while (idx < points.length - 1 && (r -= nearest[idx]) > 0) idx++;
+      centers.push(points[idx].slice());
+    }
+
+    let sums = [];
+    for (let iter = 0; iter < maxIterations; iter++) {
+      sums = centers.map(() => [0, 0, 0, 0]);
+      for (const p of points) {
+        let best = 0;
+        let bestD = Infinity;
+        for (let j = 0; j < centers.length; j++) {
+          const d = dist2(p, centers[j]);
+          if (d < bestD) { bestD = d; best = j; }
+        }
+        const s = sums[best];
+        s[0] += p[0]; s[1] += p[1]; s[2] += p[2]; s[3]++;
+      }
+      let moved = false;
+      sums.forEach((s, j) => {
+        if (!s[3]) return;
+        const next = [s[0] / s[3], s[1] / s[3], s[2] / s[3]];
+        if (dist2(next, centers[j]) > 1) moved = true;
+        centers[j] = next;
+      });
+      if (!moved) break;
+    }
+
+    return centers
+      .map((c, j) => ({ rgb: c.map(Math.round), count: sums[j][3] }))
+      .filter((c) => c.count > 0)
+      .sort((a, b) => b.count - a.count);
+  }
+
+  async function extractFromImage(file) {
+    if (!file || !file.type.startsWith('image/')) {
+      toast('That file is not an image');
+      return;
+    }
+    let pixels;
+    try {
+      pixels = samplePixels(await loadImage(file));
+    } catch (_) {
+      toast('Could not read that image');
+      return;
+    }
+    if (!pixels.length) {
+      toast('Image has no visible pixels');
+      return;
+    }
+    const hexes = kmeans(pixels, EXTRACT_COUNT).map((c) => rgbToHex(c.rgb));
+    // Images with fewer distinct colors than needed: pad with shades of the dominant color.
+    if (hexes.length < EXTRACT_COUNT) {
+      const [h, s] = rgbToHsl(...hexToRgb(hexes[0]));
+      for (let i = hexes.length; i < EXTRACT_COUNT; i++) {
+        hexes.push(hslToHex([h, s, 15 + (i / EXTRACT_COUNT) * 75]));
+      }
+    }
+    loadColors(hexes);
+    toast('Palette extracted from image');
+  }
+
+  /* ---------------------------------------------------------------------- */
   /* Clipboard & toast                                                       */
   /* ---------------------------------------------------------------------- */
 
@@ -635,6 +749,46 @@
   });
 
   els.save.addEventListener('click', savePalette);
+
+  els.image.addEventListener('click', () => els.imageInput.click());
+  els.imageInput.addEventListener('change', () => {
+    extractFromImage(els.imageInput.files[0]);
+    els.imageInput.value = ''; // allow picking the same file again
+  });
+
+  // Drop an image anywhere on the page
+  const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+  let dragDepth = 0;
+  document.addEventListener('dragenter', (e) => {
+    if (!hasFiles(e)) return;
+    dragDepth++;
+    els.dropOverlay.hidden = false;
+  });
+  document.addEventListener('dragleave', (e) => {
+    if (!hasFiles(e)) return;
+    if (--dragDepth <= 0) {
+      dragDepth = 0;
+      els.dropOverlay.hidden = true;
+    }
+  });
+  document.addEventListener('dragover', (e) => {
+    if (hasFiles(e)) e.preventDefault();
+  });
+  document.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    els.dropOverlay.hidden = true;
+    extractFromImage(e.dataTransfer.files[0]);
+  });
+
+  // Paste an image (e.g. a screenshot) with Ctrl+V
+  document.addEventListener('paste', (e) => {
+    const file = [...(e.clipboardData?.files || [])].find((f) => f.type.startsWith('image/'));
+    if (!file) return;
+    e.preventDefault();
+    extractFromImage(file);
+  });
 
   els.library.addEventListener('click', () => {
     renderLibrary();

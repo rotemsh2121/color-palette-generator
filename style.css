@@ -379,6 +379,22 @@ kbd {
   color: var(--muted);
 }
 
+/* ---------- Image drop overlay ---------- */
+
+.drop-overlay {
+  position: fixed;
+  inset: 12px;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  border: 3px dashed var(--accent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  backdrop-filter: blur(3px);
+  pointer-events: none;
+}
+.drop-overlay p { margin: 0; font-size: 20px; font-weight: 600; }
+
 /* ---------- Toast ---------- */
 
 .toast {

@@ -8,6 +8,7 @@
   const LIBRARY_KEY = 'palette-generator:saved';
   const PREFS_KEY = 'palette-generator:prefs';
   const EXTRACT_COUNT = 5;
+  const POOL_SIZE = 10; // colors kept from an image/cover for re-mixing on Space
   const SAMPLE_SIZE = 160; // longest side, in px, of the downscaled image we sample
 
   const $ = (sel) => document.querySelector(sel);
@@ -26,6 +27,13 @@
     source: $('#source'),
     sourceImg: $('#source-img'),
     sourceClose: $('#source-close'),
+    sourceCaption: $('#source-caption'),
+    song: $('#song'),
+    songDialog: $('#song-dialog'),
+    songForm: $('#song-form'),
+    songUrl: $('#song-url'),
+    songGo: $('#song-go'),
+    songStatus: $('#song-status'),
     library: $('#library'),
     exportBtn: $('#export'),
     exportDialog: $('#export-dialog'),
@@ -47,6 +55,9 @@
     exportKind: 'css',
   };
   const undoStack = [];
+  // While a source thumbnail is shown, Generate re-mixes from it:
+  // { kind: 'image', pool } or { kind: 'song', pool, ranked, confident }
+  let activeSource = null;
 
   /* ---------------------------------------------------------------------- */
   /* Color math                                                              */
@@ -193,6 +204,10 @@
   const hslToHex = ([h, s, l]) => rgbToHex(hslToRgb(wrapHue(h), clamp(s, 0, 100), clamp(l, 0, 100)));
 
   function generate() {
+    if (activeSource) {
+      generateFromSource();
+      return;
+    }
     pushUndo();
     const n = state.colors.length;
     const anchor = state.colors.findIndex((c) => c.locked);
@@ -500,9 +515,10 @@
   /* Image extraction (all local: the file never leaves the browser)         */
   /* ---------------------------------------------------------------------- */
 
-  function loadImage(url) {
+  function loadImage(url, crossOrigin = false) {
     return new Promise((resolve, reject) => {
       const img = new Image();
+      if (crossOrigin) img.crossOrigin = 'anonymous';
       img.onload = () => resolve(img);
       img.onerror = () => reject(new Error('unreadable'));
       img.src = url;
@@ -510,28 +526,43 @@
   }
 
   /** Show the source image as a small thumbnail; it keeps the object URL alive until replaced. */
-  function showSource(url) {
+  function showSource(url, caption = []) {
     hideSource();
     els.sourceImg.src = url;
+    els.sourceCaption.replaceChildren(
+      ...caption.map((text, i) => {
+        const el = document.createElement(i === 0 ? 'strong' : 'span');
+        el.textContent = text;
+        el.title = text;
+        return el;
+      })
+    );
+    els.sourceCaption.hidden = caption.length === 0;
     els.source.hidden = false;
   }
 
   function hideSource() {
     if (els.sourceImg.src.startsWith('blob:')) URL.revokeObjectURL(els.sourceImg.src);
     els.sourceImg.removeAttribute('src');
+    els.sourceCaption.replaceChildren();
+    activeSource = null;
     els.source.hidden = true;
   }
 
-  /** Downscale the image and return its opaque pixels as [r, g, b] triples. */
-  function samplePixels(img) {
-    const scale = Math.min(1, SAMPLE_SIZE / Math.max(img.naturalWidth, img.naturalHeight));
+  /**
+   * Downscale the image and return its opaque pixels as [r, g, b] triples.
+   * `cropY` trims that fraction off the top and bottom (e.g. letterbox bars).
+   */
+  function samplePixels(img, cropY = 0) {
+    const srcH = img.naturalHeight * (1 - 2 * cropY);
+    const scale = Math.min(1, SAMPLE_SIZE / Math.max(img.naturalWidth, srcH));
     const w = Math.max(1, Math.round(img.naturalWidth * scale));
-    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+    const h = Math.max(1, Math.round(srcH * scale));
     const canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(img, 0, 0, w, h);
+    ctx.drawImage(img, 0, img.naturalHeight * cropY, img.naturalWidth, srcH, 0, 0, w, h);
     const data = ctx.getImageData(0, 0, w, h).data;
     const pixels = [];
     for (let i = 0; i < data.length; i += 4) {
@@ -589,6 +620,61 @@
       .sort((a, b) => b.count - a.count);
   }
 
+  /** Wider set of an image's colors, weighted so minor colors still get picked sometimes. */
+  const colorPool = (pixels) =>
+    kmeans(pixels, POOL_SIZE).map((c) => ({ hex: rgbToHex(c.rgb), weight: Math.sqrt(c.count) }));
+
+  /** For images with fewer distinct colors than needed: add shades of the first color. */
+  function padWithShades(hexes, n) {
+    const out = hexes.slice(0, n);
+    if (!out.length) return out; // nothing to base shades on; caller fills the rest
+    const [h, s] = rgbToHsl(...hexToRgb(out[0]));
+    for (let i = out.length; i < n; i++) out.push(hslToHex([h, s, 15 + (i / n) * 75]));
+    return out;
+  }
+
+  const sortByLightness = (hexes) =>
+    hexes.slice().sort((a, b) => rgbToHsl(...hexToRgb(a))[2] - rgbToHsl(...hexToRgb(b))[2]);
+
+  /**
+   * Weighted random pick of `count` pool colors, preferring ones that aren't
+   * near-duplicates of each other or of `avoid` (e.g. locked colors).
+   */
+  function pickFromPool(pool, count, rng, avoid = []) {
+    const MIN_DIST = 40 ** 2;
+    const remaining = pool.slice();
+    const chosen = [];
+    const tooClose = [];
+    while (chosen.length < count && remaining.length) {
+      const total = remaining.reduce((sum, c) => sum + c.weight, 0);
+      let r = rng() * total;
+      let idx = 0;
+      while (idx < remaining.length - 1 && (r -= remaining[idx].weight) > 0) idx++;
+      const [c] = remaining.splice(idx, 1);
+      const rgb = hexToRgb(c.hex);
+      const near = [...avoid, ...chosen].some((h) => dist2(hexToRgb(h), rgb) < MIN_DIST);
+      (near ? tooClose : chosen).push(c.hex);
+    }
+    return padWithShades(chosen.concat(tooClose), count);
+  }
+
+  /** Re-mix the palette from the active image or song, keeping locked colors. */
+  function generateFromSource() {
+    pushUndo();
+    const locked = state.colors.filter((c) => c.locked).map((c) => c.hex);
+    const free = state.colors.length - locked.length;
+    if (free > 0) {
+      const src = activeSource;
+      const hexes =
+        src.kind === 'song'
+          ? songHexes(src, free, Math.random, pickFromPool(src.pool, free, Math.random, locked), Math.floor(Math.random() * 4))
+          : sortByLightness(pickFromPool(src.pool, free, Math.random, locked));
+      let k = 0;
+      state.colors = state.colors.map((c) => (c.locked ? c : { hex: hexes[k++], locked: false }));
+    }
+    render();
+  }
+
   async function extractFromImage(file) {
     if (!file || !file.type.startsWith('image/')) {
       toast('That file is not an image');
@@ -608,17 +694,254 @@
       toast('Image has no visible pixels');
       return;
     }
-    showSource(url);
-    const hexes = kmeans(pixels, EXTRACT_COUNT).map((c) => rgbToHex(c.rgb));
-    // Images with fewer distinct colors than needed: pad with shades of the dominant color.
-    if (hexes.length < EXTRACT_COUNT) {
-      const [h, s] = rgbToHsl(...hexToRgb(hexes[0]));
-      for (let i = hexes.length; i < EXTRACT_COUNT; i++) {
-        hexes.push(hslToHex([h, s, 15 + (i / EXTRACT_COUNT) * 75]));
-      }
-    }
+    const hexes = padWithShades(kmeans(pixels, EXTRACT_COUNT).map((c) => rgbToHex(c.rgb)), EXTRACT_COUNT);
     loadColors(hexes);
+    showSource(url, ['Your image', 'Space: new mix from this image']);
+    activeSource = { kind: 'image', pool: colorPool(pixels) };
     toast('Palette extracted from image');
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Song → palette                                                          */
+  /* Uses only keyless, CORS-enabled endpoints: YouTube oEmbed + thumbnails, */
+  /* lyrics.ovh, lrclib.net. Mood is guessed locally from a word lexicon.    */
+  /* ---------------------------------------------------------------------- */
+
+  const MOODS = {
+    happy: {
+      label: 'Happy', weight: 1, hues: [48, 30, 58, 195], s: [75, 95], l: [55, 70],
+      words: 'happy happiness smile smiling sun sunshine sunny laugh laughing joy joyful bright shine shining wonderful celebrate celebration fun glad lucky alive free freedom summer golden paradise hallelujah delight cheer good beautiful',
+    },
+    love: {
+      // Nearly every song mentions love, so it counts for less
+      label: 'Romantic', weight: 0.6, hues: [345, 330, 8, 318], s: [55, 80], l: [45, 75],
+      words: 'love lover lovers baby babe darling kiss kisses heart hearts hold touch forever together honey romance romantic desire adore embrace sugar cherish wedding valentine',
+    },
+    sad: {
+      label: 'Melancholy', weight: 1, hues: [215, 230, 200, 250], s: [22, 48], l: [25, 62],
+      words: 'sad sadness cry tears alone lonely loneliness goodbye gone miss missing broken hurt hurts pain sorrow lost lose empty cold rain grief regret sorry die dying dead funeral apart leave leaving ballad heartbreak heartache hollow numb blue',
+    },
+    angry: {
+      label: 'Intense', weight: 1, hues: [0, 12, 355, 22], s: [75, 95], l: [28, 48],
+      words: 'hate fight fighting fire burn burning rage kill blood scream war gun mad angry anger enemy revenge destroy smash fury violent violence devil hell damn metal punk riot bullet',
+    },
+    calm: {
+      label: 'Calm', weight: 1, hues: [170, 150, 195, 125], s: [25, 50], l: [60, 82],
+      words: 'calm peace peaceful quiet slow gentle soft breathe ocean sea river wave waves breeze float rest sleep still easy lullaby acoustic lofi chill relax relaxing garden morning meadow',
+    },
+    energetic: {
+      label: 'Energetic', weight: 1, hues: [300, 280, 180, 52], s: [85, 100], l: [50, 60],
+      words: 'dance dancing party jump run wild crazy loud move shake club tonight fast beat bounce energy electric remix rave edm boom groove disco hype',
+    },
+    dark: {
+      label: 'Dark', weight: 1, hues: [270, 260, 240, 340], s: [20, 50], l: [10, 30],
+      words: 'dark darkness shadow shadows midnight ghost ghosts demon demons death black grave secret mystery haunt haunted fear nightmare moon poison sin void abyss smoke monster witch curse',
+    },
+    nostalgic: {
+      label: 'Nostalgic', weight: 1, hues: [30, 280, 340, 200], s: [28, 55], l: [65, 82],
+      words: 'remember memory memories yesterday youth young childhood photograph dream dreams dreaming ago faded vintage nostalgia reminisce someday wish',
+    },
+  };
+
+  const MOOD_LEXICON = new Map();
+  for (const [mood, def] of Object.entries(MOODS)) {
+    for (const w of def.words.split(' ')) MOOD_LEXICON.set(w, mood);
+  }
+
+  function lexiconMood(token) {
+    const candidates = [token, token.replace(/s$/, ''), token.replace(/(ing|in|ed)$/, ''), token.replace(/(ing|in|ed)$/, 'e')];
+    for (const c of candidates) if (MOOD_LEXICON.has(c)) return MOOD_LEXICON.get(c);
+    return null;
+  }
+
+  /** Score each mood from title (weighted ×3) and lyrics. Returns moods sorted by share. */
+  function analyzeMood(title, lyrics) {
+    const scores = Object.fromEntries(Object.keys(MOODS).map((m) => [m, 0]));
+    const tally = (text, weight) => {
+      const tokens = text.toLowerCase().replace(/[’']/g, '').match(/[a-z]+/g) || [];
+      for (const t of tokens) {
+        const mood = lexiconMood(t);
+        if (mood) scores[mood] += weight * MOODS[mood].weight;
+      }
+    };
+    tally(title, 3);
+    tally(lyrics || '', 1);
+    const total = Object.values(scores).reduce((a, b) => a + b, 0);
+    return {
+      total,
+      ranked: Object.entries(scores)
+        .filter(([, v]) => v > 0)
+        .sort((a, b) => b[1] - a[1])
+        .map(([mood, v]) => ({ mood, share: v / total })),
+    };
+  }
+
+  /** Small deterministic PRNG so the same song always gives the same palette. */
+  function seededRandom(seed) {
+    let h = 1779033703 ^ seed.length;
+    for (let i = 0; i < seed.length; i++) {
+      h = Math.imul(h ^ seed.charCodeAt(i), 3432918353);
+      h = (h << 13) | (h >>> 19);
+    }
+    return () => {
+      h = Math.imul(h ^ (h >>> 16), 2246822507);
+      h = Math.imul(h ^ (h >>> 13), 3266489909);
+      h ^= h >>> 16;
+      return (h >>> 0) / 4294967296;
+    };
+  }
+
+  function moodColor(mood, slot, rng) {
+    const def = MOODS[mood];
+    const between = ([lo, hi]) => lo + rng() * (hi - lo);
+    return hslToHex([def.hues[slot % def.hues.length] + (rng() - 0.5) * 16, between(def.s), between(def.l)]);
+  }
+
+  function youtubeId(input) {
+    const raw = input.trim();
+    if (/^[\w-]{11}$/.test(raw)) return raw;
+    let url;
+    try {
+      url = new URL(/^https?:\/\//i.test(raw) ? raw : 'https://' + raw);
+    } catch (_) {
+      return null;
+    }
+    const host = url.hostname.replace(/^(www|m|music)\./, '');
+    let id = null;
+    if (host === 'youtu.be') id = url.pathname.split('/')[1];
+    else if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+      id = url.searchParams.get('v') || (url.pathname.match(/^\/(?:shorts|embed|live|v)\/([\w-]{11})/) || [])[1];
+    }
+    return id && /^[\w-]{11}$/.test(id) ? id : null;
+  }
+
+  /** Turn "Artist - Song (Official Video) ft. X" + channel name into { artist, track }. */
+  function parseSong(title, channel) {
+    let track = title
+      .replace(/\s*[([][^)\]]*[)\]]/g, '') // (Official Video), [4K], (Lyrics) …
+      .replace(/\s*\|.*$/, '')
+      .replace(/\s+(ft\.?|feat\.?|featuring)\s.*$/i, '')
+      .replace(/["“”]/g, '')
+      .trim();
+    let artist = channel.replace(/\s*-\s*Topic$/i, '').replace(/VEVO$/i, '').trim();
+    const m = track.match(/^(.+?)\s+[-–—]\s+(.+)$/);
+    if (m) {
+      artist = m[1].replace(/\s+(ft\.?|feat\.?|&|x)\s.*$/i, '').trim();
+      track = m[2].trim();
+    }
+    return { artist, track: track || title };
+  }
+
+  async function fetchJson(url, ms = 8000) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    try {
+      const res = await fetch(url, { signal: ctrl.signal });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function fetchLyrics(artist, track) {
+    const a = encodeURIComponent(artist);
+    const t = encodeURIComponent(track);
+    try {
+      const data = await fetchJson(`https://api.lyrics.ovh/v1/${a}/${t}`);
+      if (data.lyrics && data.lyrics.trim()) return data.lyrics;
+    } catch (_) { /* try the next source */ }
+    try {
+      const data = await fetchJson(`https://lrclib.net/api/get?artist_name=${a}&track_name=${t}`);
+      if (data.plainLyrics) return data.plainLyrics;
+    } catch (_) { /* no lyrics available */ }
+    return null;
+  }
+
+  /**
+   * Build `n` colors for a song: mostly from its top two moods, plus some from the cover.
+   * `slotBase` shifts which mood hues are used, so re-mixes vary.
+   */
+  function songHexes(src, n, rng, coverHexes, slotBase = 0) {
+    const { ranked, confident } = src;
+    const hexes = [];
+    if (confident) {
+      const coverCount = Math.min(coverHexes.length, Math.round((n * 2) / 5));
+      const moodCount = n - coverCount;
+      const primary = ranked[0].mood;
+      const secondary = ranked[1] && ranked[1].mood;
+      const primaryCount = secondary ? Math.ceil((moodCount * 2) / 3) : moodCount;
+      for (let j = 0; j < primaryCount; j++) hexes.push(moodColor(primary, slotBase + j, rng));
+      for (let j = primaryCount; j < moodCount; j++) hexes.push(moodColor(secondary, slotBase + j - primaryCount, rng));
+      hexes.push(...coverHexes.slice(0, coverCount));
+    } else {
+      hexes.push(...coverHexes.slice(0, n));
+    }
+    // Top up from the strongest mood (or a neutral fallback) if anything was missing
+    const fill = ranked[0] ? ranked[0].mood : 'calm';
+    for (let slot = slotBase + 3; hexes.length < n; slot++) hexes.push(moodColor(fill, slot, rng));
+    return sortByLightness(hexes);
+  }
+
+  function setSongStatus(text, isError = false) {
+    els.songStatus.textContent = text;
+    els.songStatus.classList.toggle('error', isError);
+  }
+
+  async function paletteFromSong(input) {
+    const id = youtubeId(input);
+    if (!id) {
+      setSongStatus('That doesn’t look like a YouTube link.', true);
+      return;
+    }
+
+    els.songGo.disabled = true;
+    try {
+      setSongStatus('Finding the video…');
+      let info;
+      try {
+        info = await fetchJson(
+          'https://www.youtube.com/oembed?format=json&url=' + encodeURIComponent('https://www.youtube.com/watch?v=' + id)
+        );
+      } catch (_) {
+        setSongStatus('Couldn’t find that video. It may be private, removed, or not embeddable.', true);
+        return;
+      }
+      const { artist, track } = parseSong(info.title || '', info.author_name || '');
+
+      setSongStatus(`Looking up lyrics for “${track}”…`);
+      const lyrics = await fetchLyrics(artist, track);
+
+      setSongStatus('Reading the cover art…');
+      const thumbUrl = `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+      let coverColors = [];
+      let pool = [];
+      try {
+        // hqdefault is 4:3 with letterbox bars on 16:9 videos — crop them off
+        const pixels = samplePixels(await loadImage(thumbUrl, true), 0.125);
+        coverColors = kmeans(pixels, EXTRACT_COUNT).map((c) => rgbToHex(c.rgb));
+        pool = colorPool(pixels);
+      } catch (_) { /* palette can still come from the mood */ }
+
+      const { total, ranked } = analyzeMood(info.title || '', lyrics);
+      const confident = total >= 3 && ranked.length > 0;
+      const song = { kind: 'song', pool, ranked, confident };
+      const hexes = songHexes(song, EXTRACT_COUNT, seededRandom(id), coverColors);
+
+      const moodText = confident
+        ? 'Mood: ' + ranked.slice(0, 2).map((r) => `${MOODS[r.mood].label} ${Math.round(r.share * 100)}%`).join(' · ')
+        : 'Mood unclear — colors from the cover';
+      const basis = lyrics ? 'Based on lyrics + cover' : 'No lyrics found — title + cover';
+
+      loadColors(hexes);
+      showSource(thumbUrl, [track, artist, moodText, basis, 'Space: new mix from this song']);
+      activeSource = song;
+      els.songDialog.close();
+      setSongStatus('');
+      toast(confident ? `${MOODS[ranked[0].mood].label} palette for “${track}”` : `Palette from “${track}” cover`);
+    } finally {
+      els.songGo.disabled = false;
+    }
   }
 
   /* ---------------------------------------------------------------------- */
@@ -771,6 +1094,16 @@
 
   els.image.addEventListener('click', () => els.imageInput.click());
   els.sourceClose.addEventListener('click', hideSource);
+
+  els.song.addEventListener('click', () => {
+    setSongStatus('');
+    els.songDialog.showModal();
+    els.songUrl.select();
+  });
+  els.songForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    paletteFromSong(els.songUrl.value);
+  });
   els.imageInput.addEventListener('change', () => {
     extractFromImage(els.imageInput.files[0]);
     els.imageInput.value = ''; // allow picking the same file again
@@ -828,7 +1161,7 @@
   els.downloadPng.addEventListener('click', downloadPng);
 
   // Close dialogs when clicking the backdrop
-  [els.exportDialog, els.libraryDialog].forEach((dlg) =>
+  [els.exportDialog, els.libraryDialog, els.songDialog].forEach((dlg) =>
     dlg.addEventListener('click', (e) => {
       if (e.target === dlg) dlg.close();
     })
@@ -839,7 +1172,7 @@
   /* ---------------------------------------------------------------------- */
 
   const isTyping = (el) => el && el.matches('input, select, textarea, [contenteditable="true"]');
-  const dialogOpen = () => els.exportDialog.open || els.libraryDialog.open;
+  const dialogOpen = () => els.exportDialog.open || els.libraryDialog.open || els.songDialog.open;
 
   document.addEventListener('keydown', (e) => {
     if (dialogOpen() || isTyping(e.target)) return;

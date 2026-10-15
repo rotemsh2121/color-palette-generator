@@ -400,6 +400,43 @@ kbd {
   max-height: 120px;
   border-radius: 8px;
 }
+.source figcaption {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-width: 160px;
+  padding: 6px 4px 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.source figcaption strong {
+  color: var(--text);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.song-form {
+  display: flex;
+  gap: 8px;
+  padding: 8px 20px 4px;
+}
+.song-form input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.song-status { min-height: 1.4em; margin: 6px 20px 0; font-weight: 500; }
+.song-status.error { color: #dc2626; }
+.song-note { margin: 4px 20px 20px; color: var(--muted); font-size: 12px; }
+
 .source-close {
   position: absolute;
   top: -10px;
@@ -420,6 +457,8 @@ kbd {
 @media (max-width: 720px) {
   .source { bottom: 16px; }
   .source img { max-width: 96px; max-height: 72px; }
+  .source figcaption { max-width: 96px; }
+  .song-form { flex-direction: column; }
 }
 
 /* ---------- Image drop overlay ---------- */

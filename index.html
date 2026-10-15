@@ -53,6 +53,10 @@
           <span>Image</span>
         </button>
         <input type="file" id="image-input" accept="image/*" hidden>
+        <button class="btn" id="song" title="Palette from a YouTube song">
+          <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          <span>Song</span>
+        </button>
         <button class="btn" id="save" title="Save palette">
           <svg viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
           <span>Save</span>
@@ -77,6 +81,7 @@
 
   <figure id="source" class="source" hidden>
     <img id="source-img" alt="Image the palette was extracted from">
+    <figcaption id="source-caption" hidden></figcaption>
     <button class="source-close" id="source-close" title="Hide image" aria-label="Hide image">
       <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
     </button>
@@ -119,6 +124,26 @@
     </form>
     <ul id="library-list" class="library"></ul>
     <p id="library-empty" class="empty">No saved palettes yet. Hit <strong>Save</strong> to keep one here — they're stored in this browser only.</p>
+  </dialog>
+
+  <!-- Song dialog -->
+  <dialog id="song-dialog" class="dialog">
+    <form method="dialog" class="dialog-head">
+      <h2>Palette from a song</h2>
+      <button class="btn icon ghost" aria-label="Close">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </form>
+    <form id="song-form" class="song-form">
+      <input id="song-url" type="text" inputmode="url" autocomplete="off" spellcheck="false"
+             placeholder="Paste a YouTube link, e.g. https://youtu.be/…" aria-label="YouTube link" required>
+      <button class="btn primary" id="song-go">Create palette</button>
+    </form>
+    <p id="song-status" class="song-status" role="status"></p>
+    <p class="song-note">
+      Reads the video's title and cover image from YouTube and looks up the lyrics on
+      lyrics.ovh or lrclib.net, then guesses the mood from the words. It can't hear the music itself.
+    </p>
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

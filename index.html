@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Palette Generator</title>
+  <meta name="description" content="Generate, lock, tweak, save and export color palettes. Runs entirely in your browser.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4'%3E%3Crect width='1' height='4' fill='%23264653'/%3E%3Crect x='1' width='1' height='4' fill='%232a9d8f'/%3E%3Crect x='2' width='1' height='4' fill='%23e9c46a'/%3E%3Crect x='3' width='1' height='4' fill='%23e76f51'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="toolbar">
+    <h1 class="brand">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      Palette
+    </h1>
+
+    <div class="controls">
+      <label class="field">
+        <span>Harmony</span>
+        <select id="mode">
+          <option value="random">Random</option>
+          <option value="analogous">Analogous</option>
+          <option value="monochromatic">Monochromatic</option>
+          <option value="complementary">Complementary</option>
+          <option value="split">Split complementary</option>
+          <option value="triadic">Triadic</option>
+          <option value="tetradic">Tetradic</option>
+          <option value="pastel">Pastel</option>
+          <option value="vivid">Vivid</option>
+          <option value="earthy">Earthy</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Format</span>
+        <select id="format">
+          <option value="hex">HEX</option>
+          <option value="rgb">RGB</option>
+          <option value="hsl">HSL</option>
+        </select>
+      </label>
+
+      <div class="btn-group">
+        <button class="btn icon" id="undo" title="Undo (Ctrl+Z)" aria-label="Undo">
+          <svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+        </button>
+        <button class="btn icon" id="add" title="Add color" aria-label="Add color">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <button class="btn" id="save" title="Save palette">
+          <svg viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+          <span>Save</span>
+        </button>
+        <button class="btn" id="library" title="Saved palettes">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          <span>Saved</span>
+        </button>
+        <button class="btn" id="export" title="Export palette">
+          <svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+          <span>Export</span>
+        </button>
+      </div>
+
+      <button class="btn primary" id="generate">Generate</button>
+    </div>
+  </header>
+
+  <main id="palette" class="palette" aria-live="polite"></main>
+
+  <p class="hint">Press <kbd>Space</kbd> to generate · click a code to copy · drag to reorder</p>
+
+  <!-- Export dialog -->
+  <dialog id="export-dialog" class="dialog">
+    <form method="dialog" class="dialog-head">
+      <h2>Export palette</h2>
+      <button class="btn icon ghost" aria-label="Close">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </form>
+    <div class="tabs" role="tablist" id="export-tabs">
+      <button role="tab" data-kind="css" aria-selected="true">CSS</button>
+      <button role="tab" data-kind="scss">SCSS</button>
+      <button role="tab" data-kind="tailwind">Tailwind</button>
+      <button role="tab" data-kind="json">JSON</button>
+      <button role="tab" data-kind="array">Array</button>
+    </div>
+    <textarea id="export-code" class="code" readonly spellcheck="false"></textarea>
+    <div class="dialog-actions">
+      <button class="btn" id="copy-code">Copy code</button>
+      <button class="btn" id="copy-link">Copy share link</button>
+      <button class="btn primary" id="download-png">Download PNG</button>
+    </div>
+  </dialog>
+
+  <!-- Saved palettes dialog -->
+  <dialog id="library-dialog" class="dialog">
+    <form method="dialog" class="dialog-head">
+      <h2>Saved palettes</h2>
+      <button class="btn icon ghost" aria-label="Close">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </form>
+    <ul id="library-list" class="library"></ul>
+    <p id="library-empty" class="empty">No saved palettes yet. Hit <strong>Save</strong> to keep one here — they're stored in this browser only.</p>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -23,6 +23,9 @@
     image: $('#image'),
     imageInput: $('#image-input'),
     dropOverlay: $('#drop-overlay'),
+    source: $('#source'),
+    sourceImg: $('#source-img'),
+    sourceClose: $('#source-close'),
     library: $('#library'),
     exportBtn: $('#export'),
     exportDialog: $('#export-dialog'),
@@ -497,14 +500,26 @@
   /* Image extraction (all local: the file never leaves the browser)         */
   /* ---------------------------------------------------------------------- */
 
-  function loadImage(file) {
+  function loadImage(url) {
     return new Promise((resolve, reject) => {
-      const url = URL.createObjectURL(file);
       const img = new Image();
-      img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
-      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('unreadable')); };
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('unreadable'));
       img.src = url;
     });
+  }
+
+  /** Show the source image as a small thumbnail; it keeps the object URL alive until replaced. */
+  function showSource(url) {
+    hideSource();
+    els.sourceImg.src = url;
+    els.source.hidden = false;
+  }
+
+  function hideSource() {
+    if (els.sourceImg.src.startsWith('blob:')) URL.revokeObjectURL(els.sourceImg.src);
+    els.sourceImg.removeAttribute('src');
+    els.source.hidden = true;
   }
 
   /** Downscale the image and return its opaque pixels as [r, g, b] triples. */
@@ -579,17 +594,21 @@
       toast('That file is not an image');
       return;
     }
+    const url = URL.createObjectURL(file);
     let pixels;
     try {
-      pixels = samplePixels(await loadImage(file));
+      pixels = samplePixels(await loadImage(url));
     } catch (_) {
+      URL.revokeObjectURL(url);
       toast('Could not read that image');
       return;
     }
     if (!pixels.length) {
+      URL.revokeObjectURL(url);
       toast('Image has no visible pixels');
       return;
     }
+    showSource(url);
     const hexes = kmeans(pixels, EXTRACT_COUNT).map((c) => rgbToHex(c.rgb));
     // Images with fewer distinct colors than needed: pad with shades of the dominant color.
     if (hexes.length < EXTRACT_COUNT) {
@@ -751,6 +770,7 @@
   els.save.addEventListener('click', savePalette);
 
   els.image.addEventListener('click', () => els.imageInput.click());
+  els.sourceClose.addEventListener('click', hideSource);
   els.imageInput.addEventListener('change', () => {
     extractFromImage(els.imageInput.files[0]);
     els.imageInput.value = ''; // allow picking the same file again

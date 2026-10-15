@@ -379,6 +379,49 @@ kbd {
   color: var(--muted);
 }
 
+/* ---------- Source image thumbnail ---------- */
+
+.source {
+  position: fixed;
+  left: 16px;
+  bottom: 48px;
+  z-index: 5;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  animation: swatch-in .25s ease both;
+}
+.source img {
+  display: block;
+  max-width: 160px;
+  max-height: 120px;
+  border-radius: 8px;
+}
+.source-close {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+.source-close svg { width: 14px; height: 14px; }
+
+@media (max-width: 720px) {
+  .source { bottom: 16px; }
+  .source img { max-width: 96px; max-height: 72px; }
+}
+
 /* ---------- Image drop overlay ---------- */
 
 .drop-overlay {
